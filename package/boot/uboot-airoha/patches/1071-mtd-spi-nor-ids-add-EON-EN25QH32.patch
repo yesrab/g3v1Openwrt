@@ -1,0 +1,29 @@
+From 857b459f090a1f9afbc7a395855f80614e733de8 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Mon, 28 Sep 2026 13:20:28 +0530
+Subject: [PATCH 1071/1072] mtd: spi-nor-ids: add EON EN25QH32
+
+4 MiB SPI-NOR with ID 0x1c7016 and 64 KiB sectors, as in Linux. Used on
+the TP-Link XZ000-G3 v2.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/mtd/spi/spi-nor-ids.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+index 18d61ddd..5de74455 100644
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -94,6 +94,7 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("en25q32b",   0x1c3016, 0, 64 * 1024,   64, 0) },
+ 	{ INFO("en25q64",    0x1c3017, 0, 64 * 1024,  128, SECT_4K) },
+ 	{ INFO("en25q128b",  0x1c3018, 0, 64 * 1024,  256, 0) },
++	{ INFO("en25qh32",   0x1c7016, 0, 64 * 1024,   64, 0) },
+ 	{ INFO("en25qh128",  0x1c7018, 0, 64 * 1024,  256, 0) },
+ 	{ INFO("en25s64",    0x1c3817, 0, 64 * 1024,  128, SECT_4K) },
+ #endif
+-- 
+2.43.0
+
