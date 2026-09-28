@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+#include "en751221.dtsi"
+
+/ {
+	model = "TP-Link XZ000-G3 v2";
+	compatible = "tplink,xz000-g3-v2", "econet,en751221";
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x04000000>;
+	};
+
+	chosen {
+		stdout-path = "/serial@1fbf0000:115200";
+		linux,usable-memory-range = <0x00020000 0x03fe0000>;
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		reset {
+			label = "reset";
+			linux,code = <KEY_RESTART>;
+			gpios = <&pinctrl 0 GPIO_ACTIVE_LOW>;
+			debounce-interval = <60>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_pon: led-pon {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_STATUS;
+			function-enumerator = <2>;
+			gpios = <&pinctrl 2 GPIO_ACTIVE_LOW>;
+		};
+
+		led_los: led-los {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_FAULT;
+			function-enumerator = <7>;
+			gpios = <&pinctrl 7 GPIO_ACTIVE_LOW>;
+		};
+	};
+};
+
+/* SPI-NOR instead of the dtsi's SPI-NAND */
+/delete-node/ &nand;
+
+&spi0 {
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+		/* WP# and HOLD# are only pulled up: two data lines, not four */
+		spi-tx-bus-width = <1>;
+		spi-rx-bus-width = <2>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "u-boot";
+				reg = <0x000000 0x040000>;
+				read-only;
+			};
+
+			/*
+			 * Written by U-Boot's migrate_layout: the stock factoryinfo
+			 * block at 0x0 and the stock loid block at 0x8000.
+			 */
+			partition@40000 {
+				label = "factory";
+				reg = <0x040000 0x010000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_factory_0: macaddr@0 {
+						compatible = "mac-base";
+						reg = <0x0 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					/* Big endian; unrelated data follows, keep it 0xa0 long */
+					en7571_bob: calibration@16 {
+						reg = <0x16 0xa0>;
+					};
+
+					gpon_serial: serial@8031 {
+						reg = <0x8031 0x10>;
+					};
+
+					gpon_password: password@8048 {
+						reg = <0x8048 0x15>;
+					};
+				};
+			};
+
+			partition@50000 {
+				compatible = "denx,fit";
+				label = "firmware";
+				reg = <0x050000 0x3b0000>;
+			};
+		};
+	};
+};
+
+&eth {
+	status = "okay";
+};
+
+&gdm1 {
+	status = "okay";
+	nvmem-cells = <&macaddr_factory_0 0>;
+	nvmem-cell-names = "mac-address";
+};
+
+&i2c0 {
+	status = "okay";
+
+	en7571: lddla@70 {
+		compatible = "airoha,en7571";
+		reg = <0x70>;
+
+		nvmem-cells = <&en7571_bob>;
+		nvmem-cell-names = "calibration";
+
+		#optical-frontend-cells = <0>;
+	};
+};
+
+&xpon_phy {
+	status = "okay";
+};
+
+&xpon {
+	status = "okay";
+
+	/* Unprovisioned: stock default serial "TPLG" + MAC[2..5] */
+	nvmem-cells = <&gpon_serial>, <&gpon_password>;
+	nvmem-cell-names = "gpon-serial-number", "gpon-password";
+	airoha,gpon-serial-from-mac;
+	omci-vendor-id = "TPLG";
+
+	optical-frontends = <&en7571>;
+	optical-frontend-names = "pon";
+
+	leds = <&led_pon>, <&led_los>;
+	led-names = "pon", "los";
+};
+
+&gdm2 {
+	status = "okay";
+	phy-mode = "internal";
+	airoha,xpon-managed;
+	openwrt,netdev-name = "pon0";
+	nvmem-cells = <&macaddr_factory_0 0>;
+	nvmem-cell-names = "mac-address";
+};
+
+&switch0 {
+	status = "okay";
+};
+
+&fsw_port4 {
+	label = "lan";
+	status = "okay";
+};
+
+&fsw_phy4 {
+	status = "okay";
+};
+
+&gport5 {
+	status = "disabled";
+};
