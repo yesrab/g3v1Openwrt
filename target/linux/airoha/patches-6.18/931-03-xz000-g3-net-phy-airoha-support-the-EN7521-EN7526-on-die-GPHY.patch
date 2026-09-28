@@ -1,0 +1,98 @@
+From ca6ebeeca507840c4f21b57ac35265e056c0bc80 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Sun, 27 Sep 2026 03:31:55 +0530
+Subject: [PATCH] net: phy: airoha: support the EN7521/EN7526 on-die GPHY
+
+The EN7521/EN7526 standalone GPHY ("7522 Ge" in the vendor SDK)
+reports ID 0x03a29471 instead of the EN7512 0x03a29451. The vendor
+driver sends both through the same register, calibration and patch
+paths, but here it fell back to the generic PHY driver and skipped
+REXT/R50/TX offset/TX amplitude calibration.
+
+0x03a29471 is also the EN8801SN ID, so claim it only on the EN751221
+on-die switch MDIO bus.
+
+Found on the TP-Link XZ000-G3 v2 (EN7521, single GbE port on PHY 12).
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/phy/mediatek/airoha-ge-soc.c | 35 ++++++++++++++++++++++++
+ drivers/net/phy/mediatek/mtk-ge-soc.h    |  1 +
+ 2 files changed, 36 insertions(+)
+
+diff --git a/drivers/net/phy/mediatek/airoha-ge-soc.c b/drivers/net/phy/mediatek/airoha-ge-soc.c
+index e52f7f034..a0ba11fc3 100644
+--- a/drivers/net/phy/mediatek/airoha-ge-soc.c
++++ b/drivers/net/phy/mediatek/airoha-ge-soc.c
+@@ -2527,6 +2527,23 @@ static int en7512_phy_probe(struct phy_device *phydev)
+ 	return en7512_phy_calib(phydev);
+ }
+ 
++/*
++ * The EN7521/EN7526 GPHY is an EN7512 GPHY that reports the EN8801SN ID, so
++ * only claim it on the EN751221 on-die switch bus.
++ */
++static int en7522_phy_match_phy_device(struct phy_device *phydev,
++				       const struct phy_driver *phydrv)
++{
++	struct device *parent = phydev->mdio.bus->parent;
++
++	if (!phy_id_compare(phydev->phy_id, AIROHA_GPHY_ID_EN7522,
++			    phydrv->phy_id_mask))
++		return 0;
++
++	return parent && of_device_is_compatible(parent->of_node,
++						 "econet,en751221-switch");
++}
++
+ static int en7512_phy_config_init(struct phy_device *phydev)
+ {
+ 	int ret;
+@@ -3195,6 +3212,23 @@ static struct phy_driver mtk_socphy_driver[] = {
+ 		.read_page	= mtk_phy_read_page,
+ 		.write_page	= mtk_phy_write_page,
+ 	},
++	{
++		PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7522),
++		.name		= "EcoNet EN7521/EN7526 GPHY",
++		.match_phy_device = en7522_phy_match_phy_device,
++		.config_init	= en7512_phy_config_init,
++		.config_intr	= genphy_no_config_intr,
++		.handle_interrupt = genphy_handle_interrupt_no_ack,
++		.probe		= en7512_phy_probe,
++		.led_blink_set	= mt798x_phy_led_blink_set,
++		.led_brightness_set = mt798x_phy_led_brightness_set,
++		.led_hw_is_supported = mt798x_phy_led_hw_is_supported,
++		.led_hw_control_set = mt798x_phy_led_hw_control_set,
++		.led_hw_control_get = mt798x_phy_led_hw_control_get,
++		.led_polarity_set = an7581_phy_led_polarity_set,
++		.read_page	= mtk_phy_read_page,
++		.write_page	= mtk_phy_write_page,
++	},
+ 	{
+ 		PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7528),
+ 		.name		= "Airoha EN7528/EN7580 PHY",
+@@ -3263,6 +3297,7 @@ module_phy_driver(mtk_socphy_driver);
+ 
+ static const struct mdio_device_id __maybe_unused airoha_socphy_tbl[] = {
+ 	{ PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7512) },
++	{ PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7522) },
+ 	{ PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7528) },
+ 	{ PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_EN7523) },
+ 	{ PHY_ID_MATCH_EXACT(AIROHA_GPHY_ID_AN7581) },
+diff --git a/drivers/net/phy/mediatek/mtk-ge-soc.h b/drivers/net/phy/mediatek/mtk-ge-soc.h
+index 4b6ae5fbc..bf749f1d1 100644
+--- a/drivers/net/phy/mediatek/mtk-ge-soc.h
++++ b/drivers/net/phy/mediatek/mtk-ge-soc.h
+@@ -8,6 +8,7 @@
+ #define MTK_GPHY_ID_MT7981			0x03a29461
+ #define MTK_GPHY_ID_MT7988			0x03a29481
+ #define AIROHA_GPHY_ID_EN7512			0x03a29451
++#define AIROHA_GPHY_ID_EN7522			0x03a29471
+ #define AIROHA_GPHY_ID_EN7528			0x03a29491
+ #define AIROHA_GPHY_ID_EN7523			0x03a294a1
+ #define AIROHA_GPHY_ID_AN7581			0x03a294c1
+-- 
+2.43.0
+

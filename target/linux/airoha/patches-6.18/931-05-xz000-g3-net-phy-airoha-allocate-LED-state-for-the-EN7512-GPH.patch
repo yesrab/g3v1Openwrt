@@ -1,0 +1,43 @@
+From e2cf5ac9c576413de4e3dbfedec66a7a7f266e7d Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Sun, 27 Sep 2026 14:57:13 +0530
+Subject: [PATCH] net: phy: airoha: allocate LED state for the EN7512 GPHY
+
+The EN7512 (and EN7521/EN7526) GPHY driver uses the mt798x LED callbacks,
+which keep their state in phydev->priv, but its probe never allocated it.
+With PHY LEDs described in DT the first brightness update oopses:
+
+  Unable to handle kernel paging request at virtual address 00000000
+  test_and_clear_bit+0x.. <- mtk_phy_hw_led_blink_set
+  <- mt798x_phy_led_brightness_set <- set_brightness_delayed
+
+Seen on the TP-Link XZ000-G3 v2 right after GPHY calibration.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/phy/mediatek/airoha-ge-soc.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/net/phy/mediatek/airoha-ge-soc.c b/drivers/net/phy/mediatek/airoha-ge-soc.c
+index a0ba11fc3..fd40ef58e 100644
+--- a/drivers/net/phy/mediatek/airoha-ge-soc.c
++++ b/drivers/net/phy/mediatek/airoha-ge-soc.c
+@@ -2523,6 +2523,14 @@ static int en7512_phy_calib(struct phy_device *phydev)
+ 
+ static int en7512_phy_probe(struct phy_device *phydev)
+ {
++	struct mtk_socphy_priv *priv;
++
++	/* The mt798x LED callbacks keep their state in phydev->priv. */
++	priv = devm_kzalloc(&phydev->mdio.dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++	phydev->priv = priv;
++
+ 	/* EN7512 has one standalone GPHY at MDIO address 12. */
+ 	return en7512_phy_calib(phydev);
+ }
+-- 
+2.43.0
+

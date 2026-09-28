@@ -1,0 +1,268 @@
+From 69973beaa86cb0c34bb2d403ae3481b2c3b6a3fa Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 01:17:21 +0530
+Subject: [PATCH] net: airoha: xpon: resume on the retained MIB when no OMCI
+ follows O5
+
+After an optical outage an OLT may re-range the ONU but send no OMCI,
+and possibly not even re-configure the OMCC, while its view of the MIB
+still matches. The OMCC-up path then never runs and the GPON netdev
+stays not-ready until a reboot.
+
+The vendor xpon module covers this with an OMCI/OAM monitor which turns
+WAN traffic on after a bounded wait (maxNoOAMWaitTime) even if no OMCI
+arrives. Do the same: arm a 15 s timer on every entry into O5, and if
+the agent is still not operational when it fires, resume on the
+retained MIB through the new omci_device_resume_retained(). It shares
+the resume logic with the OMCC-up path and only reports the agent
+operational when the retained MIB yields a datapath. An OLT which does
+provision later still starts with a MIB Reset, which rebuilds it.
+
+The timer runs on the ordered FSM workqueue, is cancelled on leaving O5
+and in gpon_disable(), and re-checks O5 and the agent state before
+acting.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ .../net/ethernet/airoha/airoha_gpon_omci.c    |  6 ++
+ .../net/ethernet/airoha/airoha_gpon_omci.h    |  1 +
+ drivers/net/ethernet/airoha/airoha_xpon.c     | 46 ++++++++++++++
+ drivers/net/ethernet/airoha/airoha_xpon.h     | 12 ++++
+ include/net/xpon/omci.h                       |  1 +
+ net/xpon/omci/agent.c                         | 60 ++++++++++++++++++-
+ 6 files changed, 123 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/airoha/airoha_gpon_omci.c b/drivers/net/ethernet/airoha/airoha_gpon_omci.c
+index d47ca3796..8a61da64f 100644
+--- a/drivers/net/ethernet/airoha/airoha_gpon_omci.c
++++ b/drivers/net/ethernet/airoha/airoha_gpon_omci.c
+@@ -220,6 +220,12 @@ void airoha_gpon_omci_reconcile_services(struct airoha_gpon_omci *omci)
+ 		omci_device_reconcile_services(omci->odev);
+ }
+ 
++int airoha_gpon_omci_resume_retained(struct airoha_gpon_omci *omci)
++{
++	return omci && omci->odev ? omci_device_resume_retained(omci->odev) :
++				    -ENODEV;
++}
++
+ void airoha_gpon_omci_reset_session(struct airoha_gpon_omci *omci)
+ {
+ 	omci_device_reset_session(omci->odev);
+diff --git a/drivers/net/ethernet/airoha/airoha_gpon_omci.h b/drivers/net/ethernet/airoha/airoha_gpon_omci.h
+index a1c76db16..12b801d6f 100644
+--- a/drivers/net/ethernet/airoha/airoha_gpon_omci.h
++++ b/drivers/net/ethernet/airoha/airoha_gpon_omci.h
+@@ -34,6 +34,7 @@ void airoha_gpon_omci_set_channel(struct airoha_gpon_omci *omci,
+ 				  u16 gem_port_id, bool valid);
+ void airoha_gpon_omci_set_state(struct airoha_gpon_omci *omci, u8 state);
+ void airoha_gpon_omci_reconcile_services(struct airoha_gpon_omci *omci);
++int airoha_gpon_omci_resume_retained(struct airoha_gpon_omci *omci);
+ void airoha_gpon_omci_reset_session(struct airoha_gpon_omci *omci);
+ int airoha_gpon_omci_send_dying_gasp(struct airoha_gpon_omci *omci);
+ bool airoha_gpon_omci_receive(void *data, struct sk_buff *skb, u8 channel,
+diff --git a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+index da08e028b..37844c967 100644
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c
+@@ -2215,6 +2215,13 @@ static void gpon_cb_state_changed(void *hw_priv, enum gpon_state state)
+ 	mutex_unlock(&priv->link_state_lock);
+ 	gpon_refresh_netdev_link(priv, false);
+ 
++	/* Bounded wait for OMCI after (re)entering O5, see GPON_OMCI_FALLBACK_MS. */
++	if (state == GPON_O5_OPERATION)
++		mod_delayed_work(priv->fsm_wq, &priv->omci_fallback_work,
++				 msecs_to_jiffies(GPON_OMCI_FALLBACK_MS));
++	else
++		cancel_delayed_work(&priv->omci_fallback_work);
++
+ 	if (state != GPON_O5_OPERATION)
+ 		timer_delete(&priv->ber_timer);
+ 
+@@ -2540,6 +2547,11 @@ static void gpon_disable(struct xpon_priv *priv)
+ 	else
+ 		cancel_delayed_work_sync(&priv->to2_work);
+ 
++	if (current_work() == &priv->omci_fallback_work.work)
++		cancel_delayed_work(&priv->omci_fallback_work);
++	else
++		cancel_delayed_work_sync(&priv->omci_fallback_work);
++
+ 	timer_delete_sync(&priv->ber_timer);
+ 	if (current_work() == &priv->phy_link_work.work)
+ 		cancel_delayed_work(&priv->phy_link_work);
+@@ -2856,6 +2868,38 @@ gpon_apply_runtime_identity(struct xpon_priv *priv,
+ 		 identity->serial_source, identity->password_source);
+ }
+ 
++/*
++ * O5 was reached GPON_OMCI_FALLBACK_MS ago and the OMCI agent is still not
++ * operational: the OLT sent no OMCI (and did not re-configure the OMCC)
++ * after re-ranging us.  Resume on the retained MIB, as the vendor ONU turns
++ * WAN traffic on after its no-OMCI wait.  Runs on the ordered FSM queue, so
++ * it cannot race the FSM itself; gpon_disable() cancels it on every stop.
++ */
++static void gpon_omci_fallback_work_fn(struct work_struct *work)
++{
++	struct xpon_priv *priv = container_of(to_delayed_work(work),
++					      struct xpon_priv,
++					      omci_fallback_work);
++	bool waiting;
++	int ret;
++
++	mutex_lock(&priv->link_state_lock);
++	waiting = priv->gpon_o5 && !priv->omci_operational;
++	mutex_unlock(&priv->link_state_lock);
++	if (!waiting)
++		return;
++
++	ret = airoha_gpon_omci_resume_retained(&priv->omci);
++	if (ret)
++		dev_info(priv->dev,
++			 "no OMCI %u s after O5 and no retained service to resume: %d\n",
++			 GPON_OMCI_FALLBACK_MS / 1000, ret);
++	else
++		dev_info(priv->dev,
++			 "no OMCI %u s after O5, resumed on the retained MIB\n",
++			 GPON_OMCI_FALLBACK_MS / 1000);
++}
++
+ static void gpon_restart_work_fn(struct work_struct *work)
+ {
+ 	struct xpon_priv *priv =
+@@ -4096,6 +4140,8 @@ static int airoha_xpon_init_gpon(struct platform_device *pdev,
+ 	INIT_DELAYED_WORK(&priv->to1_work, gpon_to1_work_fn);
+ 	INIT_DELAYED_WORK(&priv->to2_work, gpon_to2_work_fn);
+ 	INIT_DELAYED_WORK(&priv->restart_work, gpon_restart_work_fn);
++	INIT_DELAYED_WORK(&priv->omci_fallback_work,
++			  gpon_omci_fallback_work_fn);
+ 	atomic_set(&priv->pending_irqs, 0);
+ 
+ 	/* Keep the Linux IRQ line enabled and quiesce the MAC at its source. */
+diff --git a/drivers/net/ethernet/airoha/airoha_xpon.h b/drivers/net/ethernet/airoha/airoha_xpon.h
+index db65eb6ca..f3955828b 100644
+--- a/drivers/net/ethernet/airoha/airoha_xpon.h
++++ b/drivers/net/ethernet/airoha/airoha_xpon.h
+@@ -322,6 +322,17 @@ struct airoha_xpon_match_data {
+ #define GPON_CONFIG_RESTART_DEBOUNCE_MS	250
+ #define XPON_LINK_POLL_MS		250
+ #define GPON_REARM_RETRY_MS		1000
++/*
++ * No-OMCI fallback after (re)entering O5.  After an optical outage an OLT
++ * may re-range the ONU but send no OMCI, and possibly not even re-configure
++ * the OMCC, while its view of the MIB still matches.  The vendor xpon module
++ * handles this with an OMCI/OAM monitor which turns WAN traffic on after a
++ * bounded wait (maxNoOAMWaitTime) even if no OMCI arrives.  Match it: if the
++ * agent is still not operational this long after O5, resume on the retained
++ * MIB.  The OMCC-up path normally resumes much earlier; this only covers an
++ * OLT which never re-configures the OMCC.
++ */
++#define GPON_OMCI_FALLBACK_MS		15000
+ 
+ #define GPON_MAX_GEM_ID		4096
+ #define GPON_MAX_TCONT		32
+@@ -414,6 +425,7 @@ struct xpon_priv {
+ 	struct delayed_work	to2_work;	/* O6: 100 ms → O1 */
+ 	struct delayed_work	restart_work;	/* OLT deactivation recovery */
+ 	struct delayed_work	phy_link_work;	/* Digital PHY link monitor */
++	struct delayed_work	omci_fallback_work; /* O5 without OMCI */
+ 	atomic_t		pending_irqs;
+ 
+ 	/*
+diff --git a/include/net/xpon/omci.h b/include/net/xpon/omci.h
+index 7f38d9bef..ce753f05f 100644
+--- a/include/net/xpon/omci.h
++++ b/include/net/xpon/omci.h
+@@ -360,5 +360,6 @@ int omci_device_send_dying_gasp(struct omci_device *odev);
+ void omci_device_receive(struct omci_device *odev, struct sk_buff *skb,
+ 			 u16 gem_port_id, u32 flags);
+ int omci_device_reconcile_services(struct omci_device *odev);
++int omci_device_resume_retained(struct omci_device *odev);
+ 
+ #endif /* _NET_OMCI_H */
+diff --git a/net/xpon/omci/agent.c b/net/xpon/omci/agent.c
+index 0131fdf51..bac0effef 100644
+--- a/net/xpon/omci/agent.c
++++ b/net/xpon/omci/agent.c
+@@ -4360,6 +4360,20 @@ int omci_agent_send_dying_gasp(struct omci_device *odev)
+ 	return 0;
+ }
+ 
++/*
++ * Resume on the retained MIB: reinstall its services and tell whether that
++ * yields a datapath, i.e. whether the agent may report itself operational
++ * without having received OMCI in this session.
++ */
++static bool omci_agent_resume_retained_locked(struct omci_device *odev)
++{
++	struct omci_agent *agent = &odev->agent;
++
++	return agent->enabled &&
++	       !omci_agent_reconcile_services_locked(odev) &&
++	       !xa_empty(&agent->services);
++}
++
+ void omci_agent_channel_changed(struct omci_device *odev, bool valid)
+ {
+ 	struct omci_agent *agent = &odev->agent;
+@@ -4382,9 +4396,7 @@ void omci_agent_channel_changed(struct omci_device *odev, bool valid)
+ 		 * not a usable signal: the MIB Reset in routine provisioning
+ 		 * clears it while the resulting services stay valid.
+ 		 */
+-		operational = agent->enabled &&
+-			      !omci_agent_reconcile_services_locked(odev) &&
+-			      !xa_empty(&agent->services);
++		operational = omci_agent_resume_retained_locked(odev);
+ 	}
+ 	agent->operational = operational;
+ 	mutex_unlock(&agent->lock);
+@@ -5050,3 +5062,45 @@ int omci_device_reconcile_services(struct omci_device *odev)
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(omci_device_reconcile_services);
++
++/**
++ * omci_device_resume_retained() - resume without waiting for OMCI
++ * @odev: OMCI device
++ *
++ * For a MAC driver's no-OMCI fallback.  The vendor ONU turns WAN traffic on
++ * after a bounded wait in O5 even if the OLT sends no OMCI; this is the
++ * equivalent for the in-kernel agent.  If the agent is not operational yet,
++ * reinstall the services of the retained MIB and report the agent
++ * operational when that yields a datapath.  An OLT which does provision
++ * later still starts with a MIB Reset, which rebuilds everything.
++ *
++ * Return: 0 if the agent is operational, -EOPNOTSUPP if the agent is
++ * disabled, or -ENODATA if the retained MIB yields no service.
++ */
++int omci_device_resume_retained(struct omci_device *odev)
++{
++	struct omci_agent *agent;
++	bool resumed = false;
++	int ret = 0;
++
++	if (!odev)
++		return -EINVAL;
++
++	agent = &odev->agent;
++	mutex_lock(&agent->lock);
++	if (!agent->operational) {
++		if (!agent->enabled)
++			ret = -EOPNOTSUPP;
++		else if (!omci_agent_resume_retained_locked(odev))
++			ret = -ENODATA;
++		else
++			resumed = true;
++		agent->operational = resumed;
++	}
++	mutex_unlock(&agent->lock);
++
++	if (resumed)
++		omci_agent_report_operational(odev, true);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(omci_device_resume_retained);
+-- 
+2.43.0
+

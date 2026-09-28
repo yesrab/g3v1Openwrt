@@ -1,0 +1,194 @@
+From cd02a2963c38edee86978b96668e4c619b33804d Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 19:24:26 +0530
+Subject: [PATCH] net: airoha: xpon: drain the GDM2 upstream when an EN751221
+ session stops
+
+After an optical outage of several minutes the ONU re-ranged, OMCI
+provisioning completed and pon0 forwarded again, but no upstream data
+got through and PPPoE never came back until a reboot. The GPON restart
+early in every boot never showed this because nothing had been queued
+on the service T-CONTs before it.
+
+gpon_disable() only clears the GDM2 channel enables, so frames still
+queued for the T-CONT channels of the lost session stay held against
+them, and the next session reuses those channels for the same
+Alloc-IDs. The EN7512 SDK and the shipping EN751221 firmware drain them
+on every WAN link loss (fe_channel_drop(), the default behind
+FE_API_SET_CHANNEL_RETIRE_ALL): GDM2 is looped back into a drop forward
+with every T-CONT channel enabled and QDMA_WAN pushes the queued frames
+through until GDMA2_TX_CHN_VLD reads empty.
+
+Do the same once MBI is stopped. The GPON MAC itself is left alone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c  | 78 +++++++++++++++++++++++
+ drivers/net/ethernet/airoha/airoha_eth.h  |  5 ++
+ drivers/net/ethernet/airoha/airoha_regs.h |  2 +
+ drivers/net/ethernet/airoha/airoha_xpon.c |  2 +
+ 4 files changed, 87 insertions(+)
+
+diff --git a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
+index 2208c87e2..a3296a2db 100644
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -4735,6 +4735,74 @@ static void econet_xpon_flush_services(struct net_device *netdev)
+ 	spin_unlock_bh(&port->xpon_service_lock);
+ }
+ 
++/*
++ * EN7512 SDK fe_channel_drop(), run when the WAN link goes down: frames still
++ * queued for the GDM2 T-CONT channels would otherwise be held against the
++ * channels of the lost session and wedge them once the next one reuses them.
++ * Loop GDM2 back into a drop forward with every T-CONT channel enabled, let
++ * QDMA_WAN push the queued frames through, then restore the channel map.
++ */
++static void econet_xpon_drain_upstream(struct net_device *netdev)
++{
++	u32 txchn, rxchn, hwf, lpbk, fwd, glb, vld;
++	struct airoha_gdm_dev *port;
++	struct airoha_qdma *qdma;
++	struct airoha_eth *eth;
++	int ret;
++
++	if (econet_validate_xpon_gdm2(netdev, &port) ||
++	    port->xpon_mode != AIROHA_XPON_MODE_GPON)
++		return;
++
++	eth = port->eth;
++	qdma = &eth->qdma[1];
++
++	txchn = airoha_fe_rr(eth, REG_GDM_TXCHN_EN(AIROHA_GDM2_IDX));
++	rxchn = airoha_fe_rr(eth, REG_GDM_RXCHN_EN(AIROHA_GDM2_IDX));
++	hwf = airoha_fe_rr(eth, REG_CDM_HWF_CHN_EN(2));
++	lpbk = airoha_fe_rr(eth, REG_GDM_LPBK_CFG(AIROHA_GDM2_IDX));
++	fwd = airoha_fe_rr(eth, REG_GDM_FWD_CFG(AIROHA_GDM2_IDX));
++	glb = airoha_qdma_rr(qdma, REG_QDMA_GLOBAL_CFG);
++
++	airoha_fe_wr(eth, REG_GDM_TXCHN_EN(AIROHA_GDM2_IDX),
++		     EN751221_GPON_TX_CHN_MASK);
++	airoha_fe_wr(eth, REG_GDM_RXCHN_EN(AIROHA_GDM2_IDX), 0);
++	airoha_fe_wr(eth, REG_CDM_HWF_CHN_EN(2), 0);
++
++	/* The vendor loopback and forward values: every class to port 7. */
++	airoha_fe_wr(eth, REG_GDM_LPBK_CFG(AIROHA_GDM2_IDX),
++		     FIELD_PREP(LPBK_GAP_MASK, 0x40) |
++		     FIELD_PREP(LPBK_LEN_MASK, 500) |
++		     LBK_CHAN_MODE_MASK | LPBK_EN_MASK);
++	airoha_fe_wr(eth, REG_GDM_FWD_CFG(AIROHA_GDM2_IDX),
++		     GDM_DROP_OVERSIZE_MASK | GDM_DROP_RUNT_MASK |
++		     GDM_DROP_CRC_ERR_MASK | GDM_IP4_CKSUM_MASK |
++		     GDM_TCP_CKSUM_MASK | GDM_UDP_CKSUM_MASK |
++		     GDM_STRIP_CRC_MASK |
++		     FIELD_PREP(GDM_UCFQ_MASK, ETX_FPORT_DROP) |
++		     FIELD_PREP(GDM_BCFQ_MASK, ETX_FPORT_DROP) |
++		     FIELD_PREP(GDM_MCFQ_MASK, ETX_FPORT_DROP) |
++		     FIELD_PREP(GDM_OCFQ_MASK, ETX_FPORT_DROP));
++	airoha_qdma_wr(qdma, REG_QDMA_GLOBAL_CFG,
++		       glb | EN751221_GLOBAL_CFG_UMAC_LOOPBACK);
++
++	ret = read_poll_timeout(airoha_fe_rr, vld, !vld, USEC_PER_MSEC,
++				300 * USEC_PER_MSEC, false, eth,
++				REG_GDM_TX_CHN_VLD(AIROHA_GDM2_IDX));
++	if (ret)
++		netdev_warn(netdev,
++			    "GDM2 upstream still holds frames on channels %#x\n",
++			    vld);
++
++	airoha_fe_wr(eth, REG_GDM_LPBK_CFG(AIROHA_GDM2_IDX), lpbk);
++	airoha_fe_wr(eth, REG_GDM_FWD_CFG(AIROHA_GDM2_IDX), fwd);
++	airoha_qdma_wr(qdma, REG_QDMA_GLOBAL_CFG, glb);
++
++	airoha_fe_wr(eth, REG_GDM_TXCHN_EN(AIROHA_GDM2_IDX), txchn);
++	airoha_fe_wr(eth, REG_GDM_RXCHN_EN(AIROHA_GDM2_IDX), rxchn);
++	airoha_fe_wr(eth, REG_CDM_HWF_CHN_EN(2), hwf);
++}
++
+ bool econet_rx_xpon_oam(struct airoha_eth *eth, u8 qdma_id,
+ 				 struct sk_buff *skb, union desc_msg *msg)
+ {
+@@ -9628,6 +9696,7 @@ static const struct airoha_eth_xpon_ops econet_xpon_ops = {
+ 	.del_service = econet_xpon_del_service,
+ 	.has_gem_service = econet_xpon_has_gem_service,
+ 	.flush_services = econet_xpon_flush_services,
++	.drain_upstream = econet_xpon_drain_upstream,
+ };
+ 
+ static const struct airoha_eth_xpon_ops airoha_xpon_ops = {
+@@ -10219,6 +10288,15 @@ void airoha_eth_xpon_flush_services(struct net_device *netdev)
+ }
+ EXPORT_SYMBOL_GPL(airoha_eth_xpon_flush_services);
+ 
++void airoha_eth_xpon_drain_upstream(struct net_device *netdev)
++{
++	const struct airoha_eth_xpon_ops *ops = airoha_eth_get_xpon_ops(netdev, NULL);
++
++	if (ops && ops->drain_upstream)
++		ops->drain_upstream(netdev);
++}
++EXPORT_SYMBOL_GPL(airoha_eth_xpon_drain_upstream);
++
+ static const struct of_device_id airoha_eth_of_match[] = {
+ 	{ .compatible = "econet,en751221-eth", .data = &econet_en751221_soc_data },
+ 	{ .compatible = "econet,en7528-eth", .data = &econet_en7528_soc_data },
+diff --git a/drivers/net/ethernet/airoha/airoha_eth.h b/drivers/net/ethernet/airoha/airoha_eth.h
+index 14c6b38bf..eee496ee9 100644
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -45,6 +45,9 @@ struct gdm;
+ #define EN751221_EPON_RX_CHN_MASK		GENMASK(7, 0)
+ #define EN751221_EPON_TX_CHN_MASK		(GENMASK(7, 0) | GENMASK(23, 16))
+ #define EN751221_EPON_HWF_CHN_MASK		GENMASK(7, 0)
++#define EN751221_GPON_TX_CHN_MASK		GENMASK(15, 0)
++/* EN7512-family QDMA GLB_CFG: loop UMAC TX back instead of sending it. */
++#define EN751221_GLOBAL_CFG_UMAC_LOOPBACK	BIT(17)
+ 
+ #define EN751221_DSA_SPORT_BASE		8
+ #define EN751221_DSA_NUM_PORTS		5
+@@ -1189,6 +1192,7 @@ struct airoha_eth_xpon_ops {
+ 	bool (*del_service)(struct net_device *netdev, u32 cookie, u16 *gem_port_id);
+ 	bool (*has_gem_service)(struct net_device *netdev, u16 gem_port_id);
+ 	void (*flush_services)(struct net_device *netdev);
++	void (*drain_upstream)(struct net_device *netdev);
+ };
+ 
+ enum airoha_mac_addr_mode {
+@@ -1383,6 +1387,7 @@ bool airoha_eth_xpon_del_service(struct net_device *netdev, u32 cookie,
+ bool airoha_eth_xpon_has_gem_service(struct net_device *netdev,
+ 				     u16 gem_port_id);
+ void airoha_eth_xpon_flush_services(struct net_device *netdev);
++void airoha_eth_xpon_drain_upstream(struct net_device *netdev);
+ int airoha_eth_set_xpon_mode(struct net_device *netdev,
+ 			      enum airoha_xpon_mode mode);
+ int airoha_eth_set_xpon_datapath(struct net_device *netdev,
+diff --git a/drivers/net/ethernet/airoha/airoha_regs.h b/drivers/net/ethernet/airoha/airoha_regs.h
+index 40194e6c1..862cdb725 100644
+--- a/drivers/net/ethernet/airoha/airoha_regs.h
++++ b/drivers/net/ethernet/airoha/airoha_regs.h
+@@ -253,6 +253,8 @@
+ #define REG_GDM_TXCHN_EN(_n)		(GDM_BASE(_n) + 0x24)
+ #define REG_GDM_RXCHN_EN(_n)		(GDM_BASE(_n) + 0x28)
+ #define REG_CDM_HWF_CHN_EN(_n)		(CDM_BASE(_n) + 0x0c)
++/* One bit per TX channel that still holds a queued frame. */
++#define REG_GDM_TX_CHN_VLD(_n)		(GDM_BASE(_n) + 0x70)
+ 
+ /* GPON downstream traffic uses GDM2 receive channels 0 and 1. */
+ #define EN7523_GDM2_GPON_RX_CHN_MASK	GENMASK(1, 0)
+diff --git a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+index 6e5446d0a..7e84b4f5d 100644
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c
+@@ -2600,6 +2600,8 @@ static void gpon_disable(struct xpon_priv *priv)
+ 				 "failed to stop GPON MPI: %d\n", ret);
+ 		dev_dbg(priv->dev, "GPON MBI/MPI stopped: %#08x\n",
+ 			gpon_read(priv, GPON_MBI_MPI_STOP));
++
++		airoha_eth_xpon_drain_upstream(priv->gdm_dev);
+ 	}
+ 
+ 	if (phy_active)
+-- 
+2.43.0
+

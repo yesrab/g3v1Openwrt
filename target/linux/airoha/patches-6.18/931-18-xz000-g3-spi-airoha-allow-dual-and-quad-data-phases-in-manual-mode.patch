@@ -1,0 +1,40 @@
+From e782654028f5e32558d1fde7ca5b8eea74922007 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 20:40:31 +0530
+Subject: [PATCH] spi: airoha: allow dual and quad data phases in manual mode
+
+airoha_spi_supports_op() only accepted a data phase wider than one wire
+for the SPI-NAND page operations, so a SPI-NOR on the manual path always
+fell back to single-wire reads. The manual FIFO already takes the data
+phase at the width it is given, including the turnaround on the phase
+before it, so accept 1-1-2 and 1-1-4 operations as well. The SPI core
+still limits them to what the device's bus width allows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/spi/spi-airoha-snfi.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/spi/spi-airoha-snfi.c b/drivers/spi/spi-airoha-snfi.c
+index ddfe1ceff..de2c91ac7 100644
+--- a/drivers/spi/spi-airoha-snfi.c
++++ b/drivers/spi/spi-airoha-snfi.c
+@@ -776,9 +776,12 @@ static bool airoha_spi_supports_op(struct spi_mem *mem,
+ 	if (airoha_spi_is_page_ops(op))
+ 		return true;
+ 
++	/*
++	 * The manual FIFO takes the data phase at the width it is given, so
++	 * 1-1-2 and 1-1-4 reads work as long as the device can do them.
++	 */
+ 	return (!op->addr.nbytes || op->addr.buswidth == 1) &&
+-	       (!op->dummy.nbytes || op->dummy.buswidth == 1) &&
+-	       (!op->data.nbytes || op->data.buswidth == 1);
++	       (!op->dummy.nbytes || op->dummy.buswidth == 1);
+ }
+ 
+ static int airoha_spi_exec_op(struct spi_mem *mem,
+-- 
+2.43.0
+

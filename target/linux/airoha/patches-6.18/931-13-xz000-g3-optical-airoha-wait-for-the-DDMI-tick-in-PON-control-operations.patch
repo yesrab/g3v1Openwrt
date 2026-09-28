@@ -1,0 +1,71 @@
+From bbc449724db1195e6683b264ecf1acdfa649e1c4 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 01:07:16 +0530
+Subject: [PATCH] optical: airoha: wait for the DDMI tick in PON control
+ operations
+
+The EN7571 DDMI/APC tick holds the frontend lock for a burst of 100 kHz
+I2C transfers, which can exceed the 100 ms bound of lddla_lock(). Mode
+selection, TX timing calibration and transmitter rearm then failed with
+-ETIMEDOUT: a GPON restart was aborted, or the transmitter stayed
+disarmed through O3 so the ONU could not answer the serial number
+request and activation was delayed until TO1 expired.
+
+These operations are part of PON bring-up and run in process context,
+so wait for the tick instead of giving up. Telemetry reads keep the
+bounded acquire.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ .../net/optical/airoha/airoha_lddla_core.c    | 20 +++++++++----------
+ 1 file changed, 9 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/net/optical/airoha/airoha_lddla_core.c b/drivers/net/optical/airoha/airoha_lddla_core.c
+index e40c69e85..26b5a9ea7 100644
+--- a/drivers/net/optical/airoha/airoha_lddla_core.c
++++ b/drivers/net/optical/airoha/airoha_lddla_core.c
+@@ -487,9 +487,8 @@ airoha_lddla_frontend_set_mode(struct optical_frontend *frontend,
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+-	ret = lddla_lock(lddla);
+-	if (ret)
+-		return ret;
++	/* PON bring-up must not fail because a DDMI/APC tick is running. */
++	mutex_lock(&lddla->lock);
+ 
+ 	/*
+ 	 * EN757x calibration/bring-up is mode-specific. Do not silently
+@@ -575,10 +574,11 @@ static int airoha_lddla_frontend_tx_rearm(struct optical_frontend *frontend)
+ 	if (!lddla || !lddla->ops->tx_rearm)
+ 		return -EOPNOTSUPP;
+ 
+-	ret = lddla_lock(lddla);
+-	if (ret)
+-		return ret;
+-
++	/*
++	 * The MAC rearms the transmitter on the way to O3; giving up while
++	 * the DDMI/APC tick holds the lock leaves the ONU silent until TO1.
++	 */
++	mutex_lock(&lddla->lock);
+ 	ret = lddla->ops->tx_rearm(lddla);
+ 	mutex_unlock(&lddla->lock);
+ 
+@@ -594,10 +594,8 @@ airoha_lddla_frontend_tx_timing_calibrate(struct optical_frontend *frontend)
+ 	if (!lddla || !lddla->ops->tx_timing_calibrate)
+ 		return -EOPNOTSUPP;
+ 
+-	ret = lddla_lock(lddla);
+-	if (ret)
+-		return ret;
+-
++	/* Startup calibration waits for an in-flight DDMI/APC cycle. */
++	mutex_lock(&lddla->lock);
+ 	ret = lddla->ops->tx_timing_calibrate(lddla);
+ 	mutex_unlock(&lddla->lock);
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,71 @@
+From 6be5e3f6bbf0eec4983272ffd679b4287b8e469a Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Mon, 28 Sep 2026 04:25:04 +0530
+Subject: [PATCH] net: airoha: fix OLT timeout during Configure_Port-ID and
+ initialize T-CONT 0
+
+1. Acknowledge Configure_Port-ID immediately before reconciling OMCI
+   services and programming hardware queues. The synchronous service
+   reconciliation takes hundreds of milliseconds, exceeding the OLT's
+   PLOAM ACK response timer and causing the OLT to send duplicate
+   Configure_Port-ID messages followed by Deactivate_ONU-ID.
+2. Program hardware T-CONT 0 with the assigned ONU-ID directly in
+   gpon_cb_set_onu_id(). According to ITU-T G.984.3, default Alloc-ID
+   is established upon ONU-ID assignment so the MAC is ready to answer
+   upstream grants immediately upon entering O5-operation.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/net/ethernet/airoha/airoha_ploam.c | 14 +++++---------
+ drivers/net/ethernet/airoha/airoha_xpon.c  |  1 +
+ 2 files changed, 6 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/net/ethernet/airoha/airoha_ploam.c b/drivers/net/ethernet/airoha/airoha_ploam.c
+index f494c0688..451fa46d7 100644
+--- a/drivers/net/ethernet/airoha/airoha_ploam.c
++++ b/drivers/net/ethernet/airoha/airoha_ploam.c
+@@ -476,24 +476,20 @@ static void handle_configure_port_id(struct ploam_priv *pp,
+ 
+ 	if (onu_id != pp->onu_id)
+ 		return;
+-	if (pp->state != GPON_O5_OPERATION)
+-		goto send_ack;
+ 
+ 	/* c[0] BE: bits[7:1]=resv, bit[0]=activate */
+ 	activate = c[0] & 1;
+ 	/* c[1]=port_id_m, c[2] BE: bits[7:4]=port_id_l, [3:0]=resv */
+ 	port_id = ((u16)c[1] << 4) | ((c[2] >> 4) & 0xF);
+ 
+-	/* Do not acknowledge an OMCC assignment until the hardware path is
+-	 * ready. The OLT will retry Configure-Port-ID after a transient
+-	 * command failure.
++	/* Acknowledge Configure_Port-ID immediately so the OLT does not time
++	 * out while OMCI service graph and hardware queues are being reconciled.
+ 	 */
+-	if (pp->ops->set_omci_gem(pp->hw_priv, port_id, activate))
+-		return;
+-
+-send_ack:
+ 	ploam_make_dm_bytes(dm_bytes, onu_id, type, c);
+ 	ploam_send_ack(pp, type, dm_bytes);
++
++	if (pp->state == GPON_O5_OPERATION)
++		pp->ops->set_omci_gem(pp->hw_priv, port_id, activate);
+ }
+ 
+ /* PLOAM_DOWN_BER_INTERVAL (0x12) — broadcast or unicast */
+diff --git a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+index 69b2e2eba..da08e028b 100644
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c
+@@ -1338,6 +1338,7 @@ static void gpon_cb_set_onu_id(void *hw_priv, u8 onu_id)
+ 
+ 	dev_info(priv->dev, "GPON assigned ONU-ID %u\n", onu_id);
+ 	gpon_write(priv, GPON_ONU_ID, ONU_ID_VLD | (onu_id & ONU_ID_MASK));
++	gpon_set_tcont_hw(priv, 0, onu_id, true);
+ 	airoha_gpon_omci_set_onu_id(&priv->omci, onu_id);
+ }
+ 
+-- 
+2.43.0
+

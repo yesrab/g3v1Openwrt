@@ -1,0 +1,71 @@
+From 3ddada57a04399ea0384d4957132a4085bf019a5 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 00:28:46 +0530
+Subject: [PATCH] net: omci: resume on the restored services when the OMCC
+ returns
+
+After an optical outage the OLT re-ranges the ONU and brings the OMCC
+back up, but a Nokia OLT sends no OMCI while its view of the MIB still
+matches. The agent reconciled the retained services yet stayed
+non-operational until an OMCI request arrived, so the GPON netdev never
+became ready again and traffic stopped until a reboot.
+
+When the OMCC returns, report the agent operational again as soon as
+reconciling the retained MIB installs at least one service. mib_sync is
+not usable for this: the MIB Reset of routine provisioning clears it
+while the services it leaves in place remain valid.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ net/xpon/omci/agent.c | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/net/xpon/omci/agent.c b/net/xpon/omci/agent.c
+index 00f4ecbd1..0131fdf51 100644
+--- a/net/xpon/omci/agent.c
++++ b/net/xpon/omci/agent.c
+@@ -4363,11 +4363,10 @@ int omci_agent_send_dying_gasp(struct omci_device *odev)
+ void omci_agent_channel_changed(struct omci_device *odev, bool valid)
+ {
+ 	struct omci_agent *agent = &odev->agent;
+-	bool operational_changed;
++	bool was_operational, operational = false;
+ 
+ 	mutex_lock(&agent->lock);
+-	operational_changed = agent->operational;
+-	agent->operational = false;
++	was_operational = agent->operational;
+ 	omci_agent_reset_duplicate_locked(agent);
+ 	omci_agent_reset_table_snapshot_locked(agent);
+ 	agent->upload_index = 0;
+@@ -4375,12 +4374,23 @@ void omci_agent_channel_changed(struct omci_device *odev, bool valid)
+ 		agent->alarm_sequence = 0;
+ 		omci_agent_clear_services_locked(odev);
+ 	} else {
+-		omci_agent_reconcile_services_locked(odev);
++		/*
++		 * After an optical outage the OLT re-ranges the ONU but sends
++		 * no OMCI while its view of the MIB still matches, so resume
++		 * as soon as the retained MIB yields a datapath again instead
++		 * of waiting for a request that may never come.  mib_sync is
++		 * not a usable signal: the MIB Reset in routine provisioning
++		 * clears it while the resulting services stay valid.
++		 */
++		operational = agent->enabled &&
++			      !omci_agent_reconcile_services_locked(odev) &&
++			      !xa_empty(&agent->services);
+ 	}
++	agent->operational = operational;
+ 	mutex_unlock(&agent->lock);
+ 
+-	if (operational_changed)
+-		omci_agent_report_operational(odev, false);
++	if (was_operational != operational)
++		omci_agent_report_operational(odev, operational);
+ }
+ 
+ int omci_agent_put_status(struct sk_buff *msg, struct omci_device *odev)
+-- 
+2.43.0
+

@@ -1,0 +1,38 @@
+From 50d00daff5f8a612da1688403080c981d932ebcf Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Sun, 27 Sep 2026 03:31:55 +0530
+Subject: [PATCH] net: omci: treat an erased identity NVMEM cell as absent
+
+Vendor flash keeps the GPON serial in a record that is left erased
+until an ISP serial is provisioned. Reading such a cell returned an
+all-0xff buffer, the serial parser rejected it and the whole xPON probe
+failed, so boards could not describe the cell unconditionally.
+
+Skip all-0xff cells so the MAC-derived or random fallback still applies.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ net/xpon/omci/identity.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/net/xpon/omci/identity.c b/net/xpon/omci/identity.c
+index d71cc8caf..1bc9dcf05 100644
+--- a/net/xpon/omci/identity.c
++++ b/net/xpon/omci/identity.c
+@@ -367,7 +367,11 @@ static int omci_identity_read_cell(struct device *dev,
+ 	nvmem_cell_put(cell);
+ 	if (IS_ERR(data))
+ 		return PTR_ERR(data);
+-	ret = setter(identity, data, len, OMCI_CONFIG_SOURCE_NVMEM);
++	/* An unprovisioned flash cell reads back erased: treat it as absent. */
++	if (!memchr_inv(data, 0xff, len))
++		ret = 0;
++	else
++		ret = setter(identity, data, len, OMCI_CONFIG_SOURCE_NVMEM);
+ 	kfree(data);
+ 	return ret;
+ }
+-- 
+2.43.0
+

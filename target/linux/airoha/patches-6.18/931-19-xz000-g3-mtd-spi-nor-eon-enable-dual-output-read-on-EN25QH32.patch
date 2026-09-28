@@ -1,0 +1,31 @@
+From dfbf0c93e27f85e48752fcec49d94082156f7904 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 20:40:32 +0530
+Subject: [PATCH] mtd: spi-nor: eon: enable dual output read on EN25QH32
+
+The EN25QH32 supports the 1-1-2 Dual Output Fast Read (3Bh), as its
+EN25QH16 and EN25QH64 siblings already declare. Declare it here too, so
+boards that wire the two data lines at a wider bus width read twice as
+fast.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/mtd/spi-nor/eon.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/mtd/spi-nor/eon.c b/drivers/mtd/spi-nor/eon.c
+index a3b57a687..8332dada9 100644
+--- a/drivers/mtd/spi-nor/eon.c
++++ b/drivers/mtd/spi-nor/eon.c
+@@ -59,6 +59,7 @@ static const struct flash_info eon_nor_parts[] = {
+ 		.id = SNOR_ID(0x1c, 0x70, 0x16),
+ 		.name = "en25qh32",
+ 		.size = SZ_4M,
++		.no_sfdp_flags = SPI_NOR_DUAL_READ,
+ 	}, {
+ 		.id = SNOR_ID(0x1c, 0x70, 0x17),
+ 		.name = "en25qh64",
+-- 
+2.43.0
+

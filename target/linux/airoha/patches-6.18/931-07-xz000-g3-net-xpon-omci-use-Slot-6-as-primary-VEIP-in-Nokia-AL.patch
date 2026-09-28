@@ -1,0 +1,77 @@
+From 426481ef2bf4f37d227d5677fb7d702661107b4d Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Mon, 28 Sep 2026 03:47:29 +0530
+Subject: [PATCH] net: xpon: omci: use Slot 6 as primary VEIP in Nokia ALCL
+ profile
+
+Nokia/Alcatel-Lucent ISAM OLTs exclusively address subscriber VEIP
+traffic on Slot 6 (entity 0x0601).
+
+1. In omci_agent_populate_defaults(), register Cardholder (Class 5) and
+   Circuit Pack (Class 6) defaults for Slot 6 so the OLT MIB upload
+   sees a valid physical equipment definition for the slot.
+2. Update GEM IWTP 256 (management/VoIP) and GEM IWTP 257 (HSI data)
+   in omci_agent_seed_nokia_locked() to point their interworking
+   termination point pointers to OMCI_UNI_ENTITY_ID(6, 1) rather than
+   the default Slot 10 (0x0a01).
+3. Drop the duplicate Extended VLAN seed on Slot 10 in Nokia profile,
+   leaving Slot 6 as the authoritative VEIP entity.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ net/xpon/omci/agent.c | 18 +++++++-----------
+ 1 file changed, 7 insertions(+), 11 deletions(-)
+
+diff --git a/net/xpon/omci/agent.c b/net/xpon/omci/agent.c
+index 775a5a2e5..00f4ecbd1 100644
+--- a/net/xpon/omci/agent.c
++++ b/net/xpon/omci/agent.c
+@@ -1146,7 +1146,7 @@ omci_agent_seed_nokia_locked(struct omci_device *odev, u8 profile)
+ 		put_unaligned_be16(256, data);
+ 		data[2] = 5;
+ 		put_unaligned_be16(OMCI_NOKIA_MAPPER_MGMT, data + 3);
+-		put_unaligned_be16(0x0a01, data + 5);
++		put_unaligned_be16(OMCI_UNI_ENTITY_ID(6, 1), data + 5);
+ 		ret = omci_mib_add_default_profile_mask(agent, profile,
+ 				OMCI_CLASS_GEM_IWTP, 256,
+ 				GENMASK(15, 8), data, sizeof(data));
+@@ -1179,7 +1179,7 @@ omci_agent_seed_nokia_locked(struct omci_device *odev, u8 profile)
+ 		put_unaligned_be16(257, data);
+ 		data[2] = 5;
+ 		put_unaligned_be16(OMCI_NOKIA_MAPPER_HSI, data + 3);
+-		put_unaligned_be16(0x0a01, data + 5);
++		put_unaligned_be16(OMCI_UNI_ENTITY_ID(6, 1), data + 5);
+ 		ret = omci_mib_add_default_profile_mask(agent, profile,
+ 				OMCI_CLASS_GEM_IWTP, 257,
+ 				GENMASK(15, 8), data, sizeof(data));
+@@ -1314,15 +1314,6 @@ omci_agent_seed_nokia_locked(struct omci_device *odev, u8 profile)
+ 		if (ret)
+ 			return ret;
+ 
+-		put_unaligned_be16(OMCI_UNI_ENTITY_ID(OMCI_VEIP_SLOT, 1),
+-				   data + 24);
+-		ret = omci_mib_add_default_profile_mask(agent, profile,
+-				OMCI_CLASS_EXTENDED_VLAN,
+-				OMCI_UNI_ENTITY_ID(OMCI_VEIP_SLOT, 1),
+-				GENMASK(15, 10), data, sizeof(data));
+-		if (ret)
+-			return ret;
+-
+ 		/* Class 131 (OLT-G): pre-seed the Nokia/ALCL OLT identity. */
+ 		memset(data, 0, sizeof(data));
+ 		memcpy(data, "ALCL", 4);
+@@ -1757,6 +1748,11 @@ static int omci_agent_populate_defaults(struct omci_device *odev)
+ 					       1, false, data);
+ 	if (ret)
+ 		return ret;
++	ret = omci_agent_add_equipment_default(agent, &topology,
++					       6, OMCI_VEIP_UNIT_TYPE,
++					       1, false, data);
++	if (ret)
++		return ret;
+ 
+ 	ret = omci_mib_add_default(agent, OMCI_CLASS_ONU_G, 0, data,
+ 				   sizeof(data));
+-- 
+2.43.0
+

@@ -1,0 +1,37 @@
+From 3e2ba647072101631e4da68a2cce87fb8d87c978 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Sun, 27 Sep 2026 03:31:54 +0530
+Subject: [PATCH] optical: airoha: accept 0xa0-byte vendor BOB images
+
+EcoNet/TP-Link firmware stores the LDD/LA BOB as 0xa0 bytes: the words
+up to and including the PON magic at 0x94. The TP-Link XZ000-G3 keeps
+it at factoryinfo+0x16 and places an unrelated 40-byte ASCII ID
+directly after it, so an NVMEM cell cannot be widened to 161 bytes
+without feeding that ID into the LUT words at 0xa0.
+
+Words past the imported length already read back as erased, so lower
+the minimum to 0xa0.
+
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/optical/airoha/airoha_lddla.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/optical/airoha/airoha_lddla.h b/drivers/net/optical/airoha/airoha_lddla.h
+index bc6428689..d8fd5ec3c 100644
+--- a/drivers/net/optical/airoha/airoha_lddla.h
++++ b/drivers/net/optical/airoha/airoha_lddla.h
+@@ -42,7 +42,8 @@ struct airoha_lddla;
+ #define AIROHA_LDDLA_FLASH_ERASED	0xffffffff
+ #define AIROHA_LDDLA_BOB_MAGIC_OFFSET		0x094
+ #define AIROHA_LDDLA_BOB_MAX_SIZE		512
+-#define AIROHA_LDDLA_BOB_MIN_SIZE		161
++/* Vendor flash stores only the words up to the magic; the rest reads erased */
++#define AIROHA_LDDLA_BOB_MIN_SIZE		0xa0
+ 
+ /*
+  * Every known Airoha LDD/LA BOB magic has the form 0xPP0507CC:
+-- 
+2.43.0
+
