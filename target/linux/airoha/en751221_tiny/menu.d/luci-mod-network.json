@@ -1,0 +1,45 @@
+{
+	"admin/network/remote_addr/*": {
+		"action": {
+			"type": "call",
+			"module": "luci.controller.admin.network",
+			"function": "remote_addr"
+		}
+	},
+
+	"admin/network/network": {
+		"title": "Interfaces",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "network/interfaces"
+		},
+		"depends": {
+			"acl": [ "luci-mod-network-config" ]
+		}
+	},
+
+	"admin/network/routes": {
+		"title": "Routing",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "network/routes"
+		},
+		"depends": {
+			"acl": [ "luci-mod-network-config" ]
+		}
+	},
+
+	"admin/network/diagnostics": {
+		"title": "Diagnostics",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "network/diagnostics"
+		},
+		"depends": {
+			"acl": [ "luci-mod-network-diagnostics" ]
+		}
+	}
+}
