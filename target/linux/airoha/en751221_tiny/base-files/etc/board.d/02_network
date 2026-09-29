@@ -6,6 +6,7 @@ setup_interfaces()
   local board="$1"
 
   case "$board" in
+  tplink,xz000-g3-v1|\
   tplink,xz000-g3-v2)
     ucidef_set_interface "lan" device "lan pon0" protocol static \
       ipaddr 192.168.1.1

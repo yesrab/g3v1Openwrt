@@ -1,11 +1,12 @@
 {
-    "git.alwaysSignOff": true,
-    "files.trimTrailingWhitespace": true,
-    "files.insertFinalNewline": true,
-    "files.trimFinalNewlines": true,
-    "files.eol": "\n",
+  "git.alwaysSignOff": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.eol": "\n",
 
-    "[diff]": {
-        "files.trimTrailingWhitespace": false
-    }
+  "[diff]": {
+    "files.trimTrailingWhitespace": false
+  },
+  "gitConfigUser.selectedProfile": "personal"
 }

@@ -1,0 +1,302 @@
+From e883cd6ce8fb71bf714379cee1d87661e36e04e0 Mon Sep 17 00:00:00 2001
+From: Sitaram Bulusu <sitaram.bulusu@seamless.se>
+Date: Tue, 29 Sep 2026 23:24:05 +0530
+Subject: [PATCH] airoha: en751221: add TP-Link XZ000-G3 v1
+
+Same board as the v2 (EN7521S, 64 MiB DDR2, EN7571, one GbE port,
+reset on GPIO 0, PON LED on GPIO 2, LOS LED on GPIO 7) but with a
+16 MiB XMC XM25QH128A SPI-NOR instead of the 4 MiB EN25QH32.
+
+The stock v1 layout already keeps factoryinfo at 0x40000, loid at
+0x50000 and hwinfo at 0x60000, so they stay in place and nothing
+per-unit is rewritten. migrate_layout only replaces the boot area
+(tcboot, romfile, bootflag) after the image and the stock factoryinfo
+pass their checks. The stock A/B images, config, iot and "other"
+areas become one 15.5 MiB firmware partition at 0x70000.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/mips/dts/Makefile                        |   1 +
+ .../econet,en751221-tplink_xz000-g3-v1.dts    | 111 ++++++++++++++++++
+ configs/en751221_tplink_xz000-g3-v1_defconfig |  72 ++++++++++++
+ defenvs/en751221_tplink_xz000-g3-v1           |  62 ++++++++++
+ 4 files changed, 246 insertions(+)
+ create mode 100644 arch/mips/dts/econet,en751221-tplink_xz000-g3-v1.dts
+ create mode 100644 configs/en751221_tplink_xz000-g3-v1_defconfig
+ create mode 100644 defenvs/en751221_tplink_xz000-g3-v1
+
+diff --git a/arch/mips/dts/Makefile b/arch/mips/dts/Makefile
+index 488a16b3..f28939df 100644
+--- a/arch/mips/dts/Makefile
++++ b/arch/mips/dts/Makefile
+@@ -9,6 +9,7 @@ dtb-$(CONFIG_TARGET_XILFPGA) += nexys4ddr.dtb
+ dtb-$(CONFIG_TARGET_EN751221) += \
+ 	econet,en751221-reference.dtb \
+ 	econet,en751221-tplink_archer-xr500v-v1.dtb \
++	econet,en751221-tplink_xz000-g3-v1.dtb \
+ 	econet,en751221-tplink_xz000-g3-v2.dtb
+ dtb-$(CONFIG_TARGET_EN751627) += econet,en751627-reference.dtb
+ dtb-$(CONFIG_TARGET_EN7528) += \
+diff --git a/arch/mips/dts/econet,en751221-tplink_xz000-g3-v1.dts b/arch/mips/dts/econet,en751221-tplink_xz000-g3-v1.dts
+new file mode 100644
+index 00000000..1292ee6f
+--- /dev/null
++++ b/arch/mips/dts/econet,en751221-tplink_xz000-g3-v1.dts
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: GPL-2.0+
++/dts-v1/;
++
++#include "econet,en751221.dtsi"
++
++/ {
++	model = "TP-Link XZ000-G3 v1";
++	compatible = "tplink,xz000-g3-v1", "econet,en751221";
++
++	/* EN7521 with 64 MiB in-package DDR2, 16 MiB SPI-NOR, one GbE port. */
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	keys {
++		compatible = "gpio-keys-polled";
++
++		reset {
++			label = "reset";
++			linux,code = <KEY_RESTART>;
++			gpios = <&pinctrl 0 GPIO_ACTIVE_LOW>;
++			debounce-interval = <60>;
++		};
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		pon_led: led@2 {
++			color = <LED_COLOR_ID_GREEN>;
++			function = LED_FUNCTION_STATUS;
++			function-enumerator = <2>;
++			gpios = <&pinctrl 2 GPIO_ACTIVE_LOW>;
++		};
++
++		los_led: led@7 {
++			color = <LED_COLOR_ID_RED>;
++			function = LED_FUNCTION_FAULT;
++			function-enumerator = <7>;
++			gpios = <&pinctrl 7 GPIO_ACTIVE_LOW>;
++		};
++	};
++};
++
++&uart0 {
++	status = "okay";
++};
++
++&eth {
++	status = "okay";
++};
++
++&gdm1 {
++	status = "okay";
++};
++
++&switch0 {
++	status = "okay";
++};
++
++&spi0 {
++	status = "okay";
++
++	flash@0 {
++		compatible = "jedec,spi-nor";
++		reg = <0>;
++		spi-max-frequency = <25000000>;
++		spi-tx-bus-width = <1>;
++		spi-rx-bus-width = <2>;
++
++		partitions {
++			compatible = "fixed-partitions";
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			/* Early boot stages, DRAMC and LZMA U-Boot */
++			partition@0 {
++				label = "u-boot";
++				reg = <0x000000 0x040000>;
++			};
++
++			/* Stock factoryinfo, in place: MAC at 0x0, EN7571 BOB at 0x16 */
++			partition@40000 {
++				label = "factory";
++				reg = <0x040000 0x010000>;
++				read-only;
++			};
++
++			/* Stock loid (GPON identity), in place */
++			partition@50000 {
++				label = "loid";
++				reg = <0x050000 0x010000>;
++				read-only;
++			};
++
++			/* Stock hwinfo, in place */
++			partition@60000 {
++				label = "hwinfo";
++				reg = <0x060000 0x010000>;
++				read-only;
++			};
++
++			/* Stock config/iot/kernelA/rootfsA/kernelB/rootfsB/other */
++			partition@70000 {
++				label = "firmware";
++				reg = <0x070000 0xf90000>;
++			};
++		};
++	};
++};
+diff --git a/configs/en751221_tplink_xz000-g3-v1_defconfig b/configs/en751221_tplink_xz000-g3-v1_defconfig
+new file mode 100644
+index 00000000..71ea77e9
+--- /dev/null
++++ b/configs/en751221_tplink_xz000-g3-v1_defconfig
+@@ -0,0 +1,72 @@
++CONFIG_MIPS=y
++CONFIG_SKIP_LOWLEVEL_INIT=y
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_ENV_SIZE=0x1000
++CONFIG_DM_GPIO=y
++CONFIG_DEFAULT_DEVICE_TREE="econet,en751221-tplink_xz000-g3-v1"
++CONFIG_SYS_BOOTM_LEN=0x1000000
++CONFIG_SYS_LOAD_ADDR=0x82000000
++CONFIG_ARCH_ECONET=y
++CONFIG_SYS_MIPS_TIMER_FREQ=450000000
++CONFIG_MIPS_CACHE_SETUP=y
++CONFIG_MIPS_CACHE_DISABLE=y
++CONFIG_MIPS_RELOCATION_TABLE_SIZE=0xc000
++CONFIG_RESTORE_EXCEPTION_VECTOR_BASE=y
++CONFIG_MIPS_BOOT_FDT=y
++CONFIG_FIT=y
++# CONFIG_LEGACY_IMAGE_FORMAT is not set
++CONFIG_OF_STDOUT_VIA_ALIAS=y
++CONFIG_USE_PREBOOT=y
++CONFIG_DEFAULT_FDT_FILE="econet,en751221-tplink_xz000-g3-v1.dtb"
++CONFIG_SYS_PBSIZE=1049
++CONFIG_SYS_CONSOLE_IS_IN_ENV=y
++CONFIG_DISPLAY_CPUINFO=y
++# CONFIG_DISPLAY_BOARDINFO is not set
++CONFIG_HUSH_PARSER=y
++# CONFIG_AUTO_COMPLETE is not set
++# CONFIG_SYS_LONGHELP is not set
++CONFIG_SYS_PROMPT="U-Boot> "
++CONFIG_SYS_MAXARGS=8
++# CONFIG_CMD_BDI is not set
++# CONFIG_CMD_CONSOLE is not set
++# CONFIG_CMD_ELF is not set
++# CONFIG_CMD_FDT is not set
++# CONFIG_CMD_XIMG is not set
++# CONFIG_CMD_EXPORTENV is not set
++# CONFIG_CMD_IMPORTENV is not set
++# CONFIG_CMD_EDITENV is not set
++# CONFIG_CMD_SAVEENV is not set
++CONFIG_CMD_BIN2MAC=y
++# CONFIG_CMD_RANDOM is not set
++# CONFIG_CMD_LOADS is not set
++CONFIG_CMD_MTD=y
++CONFIG_CMD_PING=y
++# CONFIG_ISO_PARTITION is not set
++CONFIG_ENV_OVERWRITE=y
++CONFIG_ENV_RELOC_GD_ENV_ADDR=y
++CONFIG_ENV_USE_DEFAULT_ENV_TEXT_FILE=y
++CONFIG_ENV_DEFAULT_ENV_TEXT_FILE="defenvs/en751221_tplink_xz000-g3-v1"
++CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG=y
++CONFIG_NET_RANDOM_ETHADDR=y
++CONFIG_SYS_RX_ETH_BUFFER=16
++CONFIG_BUTTON=y
++CONFIG_BUTTON_GPIO=y
++CONFIG_DMA=y
++CONFIG_LED=y
++CONFIG_LED_BLINK=y
++CONFIG_LED_SW_BLINK=y
++CONFIG_LED_GPIO=y
++CONFIG_MTD=y
++CONFIG_DM_MTD=y
++CONFIG_DM_SPI_FLASH=y
++CONFIG_SPI_FLASH_XMC=y
++CONFIG_SPI_FLASH_MTD=y
++CONFIG_PHY=y
++CONFIG_RAM=y
++CONFIG_SPI=y
++CONFIG_DM_SPI=y
++CONFIG_AIROHA_SNFI_SPI=y
++# CONFIG_REGEX is not set
++# CONFIG_SHA256 is not set
++CONFIG_LZMA=y
++# CONFIG_GZIP is not set
+diff --git a/defenvs/en751221_tplink_xz000-g3-v1 b/defenvs/en751221_tplink_xz000-g3-v1
+new file mode 100644
+index 00000000..bd3b234a
+--- /dev/null
++++ b/defenvs/en751221_tplink_xz000-g3-v1
+@@ -0,0 +1,62 @@
++loadaddr=0x82000000
++ipaddr=192.168.1.1
++serverip=192.168.1.10
++bootled=green:status-2
++
++bootconf=config-1
++bootfile=openwrt-airoha-en751221_tiny-tplink_xz000-g3-v1-initramfs-kernel.bin
++sysupgradefile=openwrt-airoha-en751221_tiny-tplink_xz000-g3-v1-squashfs-sysupgrade.bin
++bootloaderfile=openwrt-airoha-en751221_tiny-tplink_xz000-g3-v1-bootloader.bin
++
++set_ethaddr=setenv ethaddr; mtd read factory 0x81f00000 0 0x100 && bin2mac ethaddr 0x81f00000 6
++
++boot_tftp=tftpboot $loadaddr $bootfile && bootm $loadaddr#$bootconf
++# Read only the FIT (its totalsize, bounded by the firmware partition),
++# not the squashfs behind it.
++flash_read_openwrt=\
++  mtd read firmware $loadaddr 0 0x1000 && itest.l *$loadaddr == 0xd00dfeed && \
++  setexpr.l fitsize *0x82000004 && itest $fitsize <= f90000 && \
++  mtd read firmware $loadaddr 0 $fitsize && iminfo $loadaddr
++boot_openwrt=led $bootled blink 250; if run flash_read_openwrt; then bootm $loadaddr#$bootconf; fi; echo Install OpenWrt over TFTP; led $bootled on; run boot_tftp
++
++# Only the FIT part of the sysupgrade image carries hashes; the size check
++# keeps an oversized file from erasing a working installation.
++install_openwrt=\
++  tftpboot $loadaddr $sysupgradefile && itest $filesize <= f90000 && \
++  iminfo $loadaddr && \
++  mtd erase firmware && mtd write firmware $loadaddr 0 $filesize
++
++# The bootloader image is the 256 KiB airoha_mips_dramc image: the "6578"
++# tcboot magic, the complemented CRC32 of 0x0-0x1fffc at 0x1fffc, and an
++# LZMA U-Boot uImage for 0x81000000 at 0x20000. Everything is checked
++# before the boot area is erased; factory, loid and hwinfo are never touched.
++check_bootloader=\
++  itest $filesize == 40000 && itest.l *0x8220000c == 0x36353738 && \
++  crc32 0x82200000 0x1fffc 0x82400000 && \
++  setexpr.l blcrc *0x82400000 ^ ffffffff && itest.l *0x8221fffc == $blcrc && \
++  itest.l *0x82220000 == 0x27051956 && itest.l *0x82220010 == 0x81000000 && \
++  itest.b *0x8222001f == 3 && \
++  setexpr.l ubsize *0x8222000c && itest $ubsize <= 1ffc0 && \
++  crc32 0x82220040 $ubsize 0x82400000 && itest.l *0x82400000 == *0x82220018
++write_bootloader=\
++  mtd erase nor0 0 0x40000 && mtd write nor0 0x82200000 0 0x40000 && \
++  mtd read nor0 0x82300000 0 0x40000 && cmp.b 0x82200000 0x82300000 0x40000
++upgrade_uboot=\
++  tftpboot 0x82200000 $bootloaderfile && run check_bootloader && run write_bootloader
++
++# One-time move from the stock v1 layout. The stock factoryinfo (0x40000),
++# loid (0x50000) and hwinfo (0x60000) blocks already sit where OpenWrt
++# expects them, so nothing is merged or rewritten: only the boot area
++# (stock tcboot, romfile, bootflag) is replaced. The factoryinfo check also
++# stops a v2 board, whose 0x40000 holds loid, from taking this image.
++# Load the bootloader image to 0x82200000 first (tftpboot or loady).
++stock_factory_ok=itest.b *0x82000000 != 0xff && itest.w *0x820000aa == 0x0705 && itest.w *0x820000ac == 0x0701
++migrate_layout=\
++  run check_bootloader && \
++  mtd read nor0 0x82000000 0x40000 0x100 && run stock_factory_ok && \
++  run write_bootloader && echo Layout migrated, install OpenWrt with run install_openwrt
++
++preboot=run set_ethaddr
++# Hold reset at power-on to boot from TFTP.
++bootcmd=if button reset; then run boot_tftp; else run boot_openwrt; fi
++bootdelay=2

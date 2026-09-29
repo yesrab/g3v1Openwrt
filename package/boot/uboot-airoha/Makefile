@@ -178,6 +178,15 @@ define U-Boot/en751221_tplink_xz000-g3-v2
 endef
 UBOOT_TARGETS += en751221_tplink_xz000-g3-v2
 
+define U-Boot/en751221_tplink_xz000-g3-v1
+  NAME:=TP-Link XZ000-G3 v1
+  UBOOT_IMAGE:=u-boot.bin
+  UBOOT_CONFIG:=en751221_tplink_xz000-g3-v1
+  BUILD_SUBTARGET:=en751221_tiny
+  BUILD_DEVICES:=tplink_xz000-g3-v1
+endef
+UBOOT_TARGETS += en751221_tplink_xz000-g3-v1
+
 define U-Boot/en7528_reference
   NAME:=Genric en7528
   UBOOT_IMAGE:=u-boot.bin

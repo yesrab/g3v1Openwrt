@@ -51,3 +51,18 @@ define Device/tplink_xz000-g3-v2
     -luci-lib-uqr
 endef
 TARGET_DEVICES += tplink_xz000-g3-v2
+
+define Device/tplink_xz000-g3-v1
+  $(Device/tplink_xz000-g3-v2)
+  DEVICE_VARIANT := v1
+  DEVICE_DTS := en751221_tplink_xz000-g3-v1
+  # 16 MiB XM25QH128A, firmware at 0x70000 up to the end of the chip
+  IMAGE_SIZE := 15936k
+  # Room for SSH and HTTPS package downloads; still a bridge, no wifi/router
+  DEVICE_PACKAGES := -nand-utils -wpad-basic-mbedtls -ppp -ppp-mod-pppoe \
+    -odhcpd-ipv6only -odhcp6c -dnsmasq -firewall4 -nftables \
+    -kmod-nft-offload -urandom-seed -urngd -logd \
+    -rpcd-mod-iwinfo -libiwinfo-data -libiwinfo -luci-lib-uqr \
+    dropbear
+endef
+TARGET_DEVICES += tplink_xz000-g3-v1
