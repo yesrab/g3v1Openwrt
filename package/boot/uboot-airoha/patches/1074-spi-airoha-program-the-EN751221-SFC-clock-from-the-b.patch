@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 20:41:50 +0530
+Subject: [PATCH] spi: airoha: program the EN751221 SFC clock from the bus
+ speed
+
+EN751221 has no SPI clock provider, so set_speed() left the flash
+controller at whatever the previous stage configured. Nothing on the
+boot path writes it, and the reset value selects 12.5 MHz even where
+the device tree allows more.
+
+The SFC runs at 500 MHz / (2 * N), with N in bits 15:8 of the chip SCU
+register at 0xcc. Derive N from the requested bus speed so that
+spi-max-frequency takes effect. Linux reads the divider back when it
+registers the SPI clock, so the kernel keeps the same rate.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/spi/airoha_snfi_spi.c | 34 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/spi/airoha_snfi_spi.c b/drivers/spi/airoha_snfi_spi.c
+index 5a69f851..13a65ea1 100644
+--- a/drivers/spi/airoha_snfi_spi.c
++++ b/drivers/spi/airoha_snfi_spi.c
+@@ -89,6 +89,10 @@
+ #define SPI_CTRL_NFI2SPI_EN			BIT(0)
+ #define REG_SCUCLK_BOOT_TRP			0x00b8
+ #define SCUCLK_BOOT_TRP_BOOT_FROM_EMMC		BIT(6)
++
++#define REG_CHIP_SCU_SPI_DIV			0x00cc
++#define CHIP_SCU_SPI_DIV_MASK			GENMASK(15, 8)
++#define EN751221_SFC_SRC_HZ			500000000
+ #define SPI_NFI_SNF_NFI_CNFG_SPI_MODE			BIT(2)
+ #define SPI_CTRL_SFC_STRAP_BOOT_FROM_SPI_NAND	BIT(1)
+ 
+@@ -251,6 +255,7 @@ struct airoha_snand_soc_data {
+ 	bool has_nfi2spi;
+ 	bool has_boot_trp;
+ 	bool double_cs;
++	bool scu_spi_div;
+ 	u8 manual_dummy;
+ };
+ 
+@@ -1459,12 +1464,38 @@ static int airoha_snand_probe(struct udevice *dev)
+ 	return airoha_snand_nfi_init(priv);
+ }
+ 
++/*
++ * EN751221 has no SPI clock provider: the SFC runs at 500 MHz / (2 * N),
++ * with N in the chip SCU and 0 selecting the reset default of 12.5 MHz.
++ */
++static int airoha_snand_set_scu_spi_div(uint speed)
++{
++	struct regmap *chip_scu;
++	u32 div;
++
++	if (!speed)
++		return 0;
++
++	chip_scu = airoha_get_chip_scu_regmap();
++	if (IS_ERR(chip_scu))
++		return PTR_ERR(chip_scu);
++
++	div = DIV_ROUND_UP(EN751221_SFC_SRC_HZ, 2 * speed);
++	div = clamp_t(u32, div, 1, FIELD_MAX(CHIP_SCU_SPI_DIV_MASK));
++
++	return regmap_update_bits(chip_scu, REG_CHIP_SCU_SPI_DIV,
++				  CHIP_SCU_SPI_DIV_MASK,
++				  FIELD_PREP(CHIP_SCU_SPI_DIV_MASK, div));
++}
++
+ static int airoha_snand_nfi_set_speed(struct udevice *bus, uint speed)
+ {
+ 	struct airoha_snand_priv *priv = dev_get_priv(bus);
+ 	int ret;
+ 
+-	/* EN751221 leaves the SFC clock configured by the previous stage. */
++	if (priv->soc->scu_spi_div)
++		return airoha_snand_set_scu_spi_div(speed);
++
+ 	if (!priv->spi_clk)
+ 		return 0;
+ 
+@@ -1496,6 +1527,7 @@ static const struct dm_spi_ops airoha_snfi_spi_ops = {
+ 
+ static const struct airoha_snand_soc_data en751221_spi_data = {
+ 	.double_cs = true,
++	.scu_spi_div = true,
+ 	.manual_dummy = 1,
+ };
+ 
+-- 
+2.43.0
+

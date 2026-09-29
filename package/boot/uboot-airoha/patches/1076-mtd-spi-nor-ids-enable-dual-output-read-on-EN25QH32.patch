@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 20:41:50 +0530
+Subject: [PATCH] mtd: spi-nor-ids: enable dual output read on EN25QH32
+
+The EN25QH32 supports the 1-1-2 Dual Output Fast Read (3Bh). Declare it
+so boards that wire both data lines can use it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ drivers/mtd/spi/spi-nor-ids.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+index 5de74455..d88c63e3 100644
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -94,7 +94,7 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO("en25q32b",   0x1c3016, 0, 64 * 1024,   64, 0) },
+ 	{ INFO("en25q64",    0x1c3017, 0, 64 * 1024,  128, SECT_4K) },
+ 	{ INFO("en25q128b",  0x1c3018, 0, 64 * 1024,  256, 0) },
+-	{ INFO("en25qh32",   0x1c7016, 0, 64 * 1024,   64, 0) },
++	{ INFO("en25qh32",   0x1c7016, 0, 64 * 1024,   64, SPI_NOR_DUAL_READ) },
+ 	{ INFO("en25qh128",  0x1c7018, 0, 64 * 1024,  256, 0) },
+ 	{ INFO("en25s64",    0x1c3817, 0, 64 * 1024,  128, SECT_4K) },
+ #endif
+-- 
+2.43.0
+

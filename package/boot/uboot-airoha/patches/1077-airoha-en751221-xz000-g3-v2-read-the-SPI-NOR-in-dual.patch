@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+Date: Tue, 29 Sep 2026 20:41:51 +0530
+Subject: [PATCH] airoha: en751221: xz000-g3-v2: read the SPI-NOR in dual mode
+
+DO and DI of the EN25QH32B go to the SoC, while WP# and HOLD# only have
+pull-ups to VCC, so the flash can be read over two lines but not four.
+Single-wire reads at 25 MHz verified identical to reads at 12.5 MHz
+over the whole chip.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Ifran Ali <khanu.i.i.k.2000@gmail.com>
+---
+ arch/mips/dts/econet,en751221-tplink_xz000-g3-v2.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/mips/dts/econet,en751221-tplink_xz000-g3-v2.dts b/arch/mips/dts/econet,en751221-tplink_xz000-g3-v2.dts
+index c21e9b98..8724244a 100644
+--- a/arch/mips/dts/econet,en751221-tplink_xz000-g3-v2.dts
++++ b/arch/mips/dts/econet,en751221-tplink_xz000-g3-v2.dts
+@@ -67,7 +67,7 @@
+ 		reg = <0>;
+ 		spi-max-frequency = <25000000>;
+ 		spi-tx-bus-width = <1>;
+-		spi-rx-bus-width = <1>;
++		spi-rx-bus-width = <2>;
+ 
+ 		partitions {
+ 			compatible = "fixed-partitions";
+-- 
+2.43.0
+
