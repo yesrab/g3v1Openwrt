@@ -1,0 +1,45 @@
+From: OpenWrt XZ000-G3 v1 port
+Subject: [PATCH] airoha: en751221: xz000-g3-v1: support the Macronix MX25L12873F
+
+Some XZ000-G3 v1 boards carry a Macronix MX25L12873F (RDID c2 20 18)
+instead of the XMC XM25QH128A. The v1 configuration only enabled XMC,
+so U-Boot could not identify the flash and never found the firmware.
+
+Enable Macronix support, and declare the 1-1-2 Dual Output Fast Read
+(3Bh) for the c22018 entry so U-Boot reads this chip over two lines,
+the same way as the XMC part. The MX25L12873F runs DREAD at up to
+104 MHz with the default 8 dummy cycles; this board clocks the bus at
+25 MHz. The entry has no SPI_NOR_HAS_LOCK, so SPI_FLASH_UNLOCK_ALL
+does not write the status register, and 3-byte addressing covers the
+16 MiB, so no 4-byte mode switch is issued.
+
+Quad read stays off: the board's spi-rx-bus-width is 2.
+
+---
+ configs/en751221_tplink_xz000-g3-v1_defconfig | 1 +
+ drivers/mtd/spi/spi-nor-ids.c                 | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/configs/en751221_tplink_xz000-g3-v1_defconfig b/configs/en751221_tplink_xz000-g3-v1_defconfig
+--- a/configs/en751221_tplink_xz000-g3-v1_defconfig
++++ b/configs/en751221_tplink_xz000-g3-v1_defconfig
+@@ -59,6 +59,7 @@
+ CONFIG_MTD=y
+ CONFIG_DM_MTD=y
+ CONFIG_DM_SPI_FLASH=y
++CONFIG_SPI_FLASH_MACRONIX=y
+ CONFIG_SPI_FLASH_XMC=y
+ CONFIG_SPI_FLASH_MTD=y
+ CONFIG_PHY=y
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -315,7 +315,7 @@
+ 	{ INFO("mx25u1635e",  0xc22535, 0, 64 * 1024,  32, SECT_4K) },
+ 	{ INFO("mx25u3235f",  0xc22536, 0, 4 * 1024,  1024, SECT_4K) },
+ 	{ INFO("mx25u6435f",  0xc22537, 0, 64 * 1024, 128, SECT_4K) },
+-	{ INFO("mx25l12805d", 0xc22018, 0, 64 * 1024, 256, SECT_4K) },
++	{ INFO("mx25l12805d", 0xc22018, 0, 64 * 1024, 256, SECT_4K | SPI_NOR_DUAL_READ) },
+ 	{ INFO("mx25u12835f", 0xc22538, 0, 64 * 1024, 256, SECT_4K |
+ 	       SPI_NOR_HAS_LOCK | SPI_NOR_HAS_TB | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ INFO("mx25u51245g", 0xc2253a, 0, 64 * 1024, 1024, SECT_4K |
