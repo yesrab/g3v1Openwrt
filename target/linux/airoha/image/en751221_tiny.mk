@@ -56,6 +56,11 @@ define Device/tplink_xz000-g3-v1
   $(Device/tplink_xz000-g3-v2)
   DEVICE_VARIANT := v1
   DEVICE_DTS := en751221_tplink_xz000-g3-v1
+  # The v2 recipe expanded above already bound KERNEL and KERNEL_INITRAMFS
+  # to the v2 DTB, so bind them again to the v1 DTB
+  KERNEL := kernel-bin | lzma | fit lzma $$(KDIR)/image-$$(DEVICE_DTS).dtb
+  KERNEL_INITRAMFS := kernel-bin | lzma | \
+    fit lzma $$(KDIR)/image-$$(DEVICE_DTS).dtb
   # 16 MiB XM25QH128A, firmware at 0x70000 up to the end of the chip
   IMAGE_SIZE := 15936k
   # Room for SSH and HTTPS package downloads; still a bridge, no wifi/router
